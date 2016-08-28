@@ -325,8 +325,11 @@ class RawSocket_broker(BaseModule):
             # get the business_impact previously found and add it to the brok
             data["business_impact"] = self.dict_business_impact[data["host_name"]]
             data["in_scheduled_downtime"] = self.dict_in_scheduled_downtime[data["host_name"]]
-            if data["in_scheduled_downtime"] == 'True'
+            if data["in_scheduled_downtime"] is True: 
             	data["sla_state"] = 'OK'
+            else:
+            	data["sla_state"] = data["state"]
+
             new_line = 'event_type="HOST CHECK RESULT" ' \
                        'hostname="%(host_name)s" state="%(state)s" sla_state="%(sla_state)s" last_state="%(last_state)s" ' \
                        'state_type="%(state_type)s" last_state_type="%(last_state_type)s" ' \
@@ -354,8 +357,11 @@ class RawSocket_broker(BaseModule):
             key = data["host_name"] + "::" + data["service_description"]
             data["business_impact"] = self.dict_business_impact[key]
             data["in_scheduled_downtime"] = self.dict_in_scheduled_downtime[key]
-            if data["in_scheduled_downtime"] == 'True'
+            if data["in_scheduled_downtime"] is True:
             	data["sla_state"] = 'OK'
+            else:
+            	data["sla_state"] = data["state"]
+
             new_line = 'event_type="SERVICE CHECK RESULT" hostname="%(host_name)s" ' \
                        'servicename="%(service_description)s" state="%(state)s" sla_state="%(sla_state)s" last_state="%(last_state)s"' \
                        ' state_type="%(state_type)s" last_state_type="%(last_state_type)s" ' \
