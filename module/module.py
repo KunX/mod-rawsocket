@@ -67,8 +67,6 @@ class RawSocket_broker(BaseModule):
         self.max_buffer_size = int(getattr(modconf, 'max_buffer_size', '60000'))
         self.buffer = []
         self.ticks = 0
-        # Cache for business_impact
-        self.dict_business_impact = {}
         # Cache for in_scheduled_downtime
         self.dict_in_scheduled_downtime = {}
 
@@ -94,41 +92,41 @@ class RawSocket_broker(BaseModule):
         self.parsing_properties = {
             'host_alert': {
                 'pattern': 'event_type="%(event_type)s" hostname="%(hostname)s" state="%(state)s"'
-                           ' business_impact="%(business_impact)d" output="%(output)s"',
+                           ' output="%(output)s"',
                 'list_params': ["hostname", "state", "state_type", "attempt", "output"]},
             'service_alert': {
                 'pattern': 'event_type="%(event_type)s" hostname="%(hostname)s" '
                            'servicename="%(servicename)s" state="%(state)s"'
-                           ' business_impact="%(business_impact)d" output="%(output)s"',
+                           ' output="%(output)s"',
                 'list_params': ["hostname", "servicename", "state", "state_type", "attempt", "output"]},
             'host_downtime_alert': {
                 'pattern': 'event_type="%(event_type)s" hostname="%(hostname)s" state="%(state)s"'
-                           ' business_impact="%(business_impact)d" output="%(output)s"',
+                           ' output="%(output)s"',
                 'list_params': ["hostname", "state", "output"]},
             'service_downtime_alert': {
                 'pattern': 'event_type="%(event_type)s" hostname="%(hostname)s"'
                            ' servicename="%(servicename)s" state="%(state)s"'
-                           ' business_impact="%(business_impact)d" output="%(output)s"',
+                           ' output="%(output)s"',
                 'list_params': ["hostname", "servicename", "state", "output"]},
             'host_flapping_alert': {
                 'pattern': 'event_type="%(event_type)s" hostname="%(hostname)s" state="%(state)s"'
-                           ' business_impact="%(business_impact)d" output="%(output)s"',
+                           ' output="%(output)s"',
                 'list_params': ["hostname", "state", "output"]},
             'service_flapping_alert': {
                 'pattern': 'event_type="%(event_type)s" hostname="%(hostname)s"'
                            ' servicename="%(servicename)s" state="%(state)s"'
-                           ' business_impact="%(business_impact)d" output="%(output)s"',
+                           ' output="%(output)s"',
                 'list_params': ["hostname", "servicename", "state", "output"]},
             'host_notification': {
                 'pattern': 'event_type="%(event_type)s" contact="%(contact)s"'
                            ' hostname="%(hostname)s" ntype="%(ntype)s" command="%(command)s"'
-                           ' business_impact="%(business_impact)d" output="%(output)s"',
+                           ' output="%(output)s"',
                 'list_params': ["contact", "hostname", "ntype", "command", "output"]},
             'service_notification': {
                 'pattern': 'event_type="%(event_type)s" contact="%(contact)s"'
                            ' hostname="%(hostname)s" servicename="%(servicename)s"'
                            ' ntype="%(ntype)s" command="%(command)s"'
-                           ' business_impact="%(business_impact)d" output="%(output)s"',
+                           ' output="%(output)s"',
                 'list_params': ["contact", "hostname", "servicename", "ntype", "command", "output"]},
             'add_svc_comment': {
                 'pattern': 'event_type="%(event_type)s" message="Not Handled yet"',
@@ -164,7 +162,6 @@ class RawSocket_broker(BaseModule):
         key_search = l_params["hostname"]
         if "service_description" in l_params:
             key_search += "::" + l_params["service_description"]
-        l_params["business_impact"] = self.dict_business_impact.get(key_search, 0)
         l_params["in_scheduled_downtime"] = self.dict_in_scheduled_downtime.get(key_search, 0)
         return t, pattern % l_params
 
@@ -184,7 +181,7 @@ class RawSocket_broker(BaseModule):
                 t = t[1:]
                 formatted = datetime.datetime.fromtimestamp(int(t)).strftime('%Y-%m-%dT%H:%M:%S')
                 tz = self.get_formatted_tz()
-                isodate = formatted + tz
+                isodate = datetime.datetime.utcnow().isoformat()
                 hostname = socket.gethostname()
                 self.buffer.append("<0>%s %s %s %s[0]: timestamp=%s %s" %
                                    (isodate, hostname, socket.gethostbyname(hostname), self.name, t, new_line))
@@ -274,17 +271,15 @@ class RawSocket_broker(BaseModule):
         data = b.data
         data["output"] = data["output"].strip()  # Clean output
         # Remember initial business_impact value
-        self.dict_business_impact[data["host_name"]] = data["business_impact"]
         self.dict_in_scheduled_downtime[data["host_name"]] = data["in_scheduled_downtime"]
         # Send Initial Status
         new_line = 'event_type="INITIAL HOST STATUS" hostname="%(host_name)s" ' \
                    'state="%(state)s" in_scheduled_downtime="%(in_scheduled_downtime)s" ' \
-                   'business_impact="%(business_impact)d" ' \
                    % data
         t = time.time()
         formatted = time.strftime('%Y-%m-%dT%H:%M:%S')
         tz = self.get_formatted_tz()
-        isodate = formatted + tz
+        isodate = datetime.datetime.utcnow().isoformat()
         hostname = socket.gethostname()
         self.buffer.append("<0>%s %s %s %s[0]: timestamp=%d %s" %
                            (isodate, hostname, socket.gethostbyname(hostname), self.name, t, new_line))
@@ -294,17 +289,16 @@ class RawSocket_broker(BaseModule):
         data["output"] = data["output"].strip()  # Clean output
         # Remember initial business_impact value
         key = data["host_name"] + "::" + data["service_description"]
-        self.dict_business_impact[key] = data["business_impact"]
         self.dict_in_scheduled_downtime[key] = data["in_scheduled_downtime"]
         # Send Initial Status
         new_line = 'event_type="INITIAL SERVICE STATUS" hostname="%(host_name)s" ' \
                    'servicename="%(service_description)s" state="%(state)s" ' \
-                   'in_scheduled_downtime="%(in_scheduled_downtime)s" business_impact="%(business_impact)d" ' \
+                   'in_scheduled_downtime="%(in_scheduled_downtime)s" ' \
                    % data
         t = time.time()
         formatted = time.strftime('%Y-%m-%dT%H:%M:%S')
         tz = self.get_formatted_tz()
-        isodate = formatted + tz
+        isodate = datetime.datetime.utcnow().isoformat()
         hostname = socket.gethostname()
         self.buffer.append("<0>%s %s %s %s[0]: timestamp=%d %s" %
                            (isodate, hostname, socket.gethostbyname(hostname), self.name, t, new_line))
@@ -323,23 +317,22 @@ class RawSocket_broker(BaseModule):
                 or data['last_state'] != data['state'] \
                 or data['last_state_type'] != data['state_type']:
             # get the business_impact previously found and add it to the brok
-            data["business_impact"] = self.dict_business_impact[data["host_name"]]
             data["in_scheduled_downtime"] = self.dict_in_scheduled_downtime[data["host_name"]]
-            if data["in_scheduled_downtime"] is True: 
-            	data["sla_state"] = 'OK'
+            if data["in_scheduled_downtime"] is True:
+            	data["sla_state"] = 'UP'
             else:
             	data["sla_state"] = data["state"]
 
             new_line = 'event_type="HOST CHECK RESULT" ' \
                        'hostname="%(host_name)s" state="%(state)s" sla_state="%(sla_state)s" last_state="%(last_state)s" ' \
                        'state_type="%(state_type)s" last_state_type="%(last_state_type)s" ' \
-                       'business_impact="%(business_impact)d" in_scheduled_downtime="%(in_scheduled_downtime)s" ' \
+                       'in_scheduled_downtime="%(in_scheduled_downtime)s" ' \
                        'last_hard_state_change="%(last_hard_state_change)s" output="%(output)s"' \
                        % data
             t = time.time()
             formatted = time.strftime('%Y-%m-%dT%H:%M:%S')
             tz = self.get_formatted_tz()
-            isodate = formatted + tz
+            isodate = datetime.datetime.utcnow().isoformat()
             hostname = socket.gethostname()
             self.buffer.append("<0>%s %s %s %s[0]: timestamp=%d %s" %
                                (isodate, hostname, socket.gethostbyname(hostname), self.name, t, new_line))
@@ -355,7 +348,6 @@ class RawSocket_broker(BaseModule):
                 or data['last_state_type'] != data['state_type']:
             # get the business_impact previously found and add it to the brok
             key = data["host_name"] + "::" + data["service_description"]
-            data["business_impact"] = self.dict_business_impact[key]
             data["in_scheduled_downtime"] = self.dict_in_scheduled_downtime[key]
             if data["in_scheduled_downtime"] is True:
             	data["sla_state"] = 'OK'
@@ -365,13 +357,13 @@ class RawSocket_broker(BaseModule):
             new_line = 'event_type="SERVICE CHECK RESULT" hostname="%(host_name)s" ' \
                        'servicename="%(service_description)s" state="%(state)s" sla_state="%(sla_state)s" last_state="%(last_state)s"' \
                        ' state_type="%(state_type)s" last_state_type="%(last_state_type)s" ' \
-                       'business_impact="%(business_impact)d" in_scheduled_downtime="%(in_scheduled_downtime)s" ' \
+                       'in_scheduled_downtime="%(in_scheduled_downtime)s" ' \
                        'last_hard_state_change="%(last_hard_state_change)s" output="%(output)s"' \
                        % data
             t = time.time()
             formatted = time.strftime('%Y-%m-%dT%H:%M:%S')
             tz = self.get_formatted_tz()
-            isodate = formatted + tz
+            isodate = datetime.datetime.utcnow().isoformat()
             hostname = socket.gethostname()
             self.buffer.append("<0>%s %s %s %s[0]: timestamp=%d %s" %
                                (isodate, hostname, socket.gethostbyname(hostname), self.name, t, new_line))
@@ -381,7 +373,6 @@ class RawSocket_broker(BaseModule):
 
     def manage_update_host_status_brok(self, b):
         # Update business_impact value
-        self.dict_business_impact[b.data["host_name"]] = b.data["business_impact"]
         self.dict_in_scheduled_downtime[b.data["host_name"]] = b.data["in_scheduled_downtime"]
 
     def manage_update_service_status_brok(self, b):
