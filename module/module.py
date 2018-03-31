@@ -68,6 +68,8 @@ class RawSocket_broker(BaseModule):
         self.buffer = []
         self.ticks = 0
         # Cache for in_scheduled_downtime
+        self.hosts_downtime = {}
+        self.services_downtime = {}
         self.dict_in_scheduled_downtime = {}
 
         # Number of lines to delete when the buffer is full
@@ -141,13 +143,14 @@ class RawSocket_broker(BaseModule):
 
     # Try to connect to host, port
     def init(self):
+        logger.info("[RawSocket] initializing connection to %s:%d ...", str(self.host), self.port)
         try:
             self.con = socket.socket()
             self.con.settimeout(10)
             self.con.connect((self.host, self.port))
         except Exception:
-            logger.warning("[RawSocket broker] Failed to connect to host %s and port %d!"
-                           % (self.host, self.port))
+            logger.warning("[RawSocket] Failed to connect to host %s and port %d!"
+                           % (str(self.host), self.port))
 
     # Parse the line and create and dict of key values.
     # Return the formatted line and timestamp
@@ -270,12 +273,16 @@ class RawSocket_broker(BaseModule):
     def manage_initial_host_status_brok(self, b):
         data = b.data
         data["output"] = data["output"].strip()  # Clean output
-        # Remember initial business_impact value
-        self.dict_in_scheduled_downtime[data["host_name"]] = data["in_scheduled_downtime"]
+        host_name=b.data['host_name']
+        host_in_downtime = data["in_scheduled_downtime"]
+        host_state = data["state"]
+        self.hosts_downtime[host_name] = host_in_downtime
+        
         # Send Initial Status
-        new_line = 'event_type="INITIAL HOST STATUS" hostname="%(host_name)s" ' \
-                   'state="%(state)s" in_scheduled_downtime="%(in_scheduled_downtime)s" ' \
-                   % data
+        logger.info("[RawSocket] got initial host status: %s", host_name)
+        new_line = 'event_type="INITIAL HOST STATUS" hostname="%s" ' \
+                   'state="%s" in_scheduled_downtime="%s" ' \
+                   % (host_name,host_state,host_in_downtime)
         t = time.time()
         formatted = time.strftime('%Y-%m-%dT%H:%M:%S')
         tz = self.get_formatted_tz()
@@ -287,14 +294,20 @@ class RawSocket_broker(BaseModule):
     def manage_initial_service_status_brok(self, b):
         data = b.data
         data["output"] = data["output"].strip()  # Clean output
-        # Remember initial business_impact value
-        key = data["host_name"] + "::" + data["service_description"]
-        self.dict_in_scheduled_downtime[key] = data["in_scheduled_downtime"]
+        host_name=b.data['host_name']
+        service_description = b.data['service_description']
+        service_id = host_name+"/"+service_description
+        service_in_downtime = data["in_scheduled_downtime"]
+        service_state = data["state"]
+        self.services_downtime[service_id] = service_in_downtime
+        
         # Send Initial Status
-        new_line = 'event_type="INITIAL SERVICE STATUS" hostname="%(host_name)s" ' \
-                   'servicename="%(service_description)s" state="%(state)s" ' \
-                   'in_scheduled_downtime="%(in_scheduled_downtime)s" ' \
-                   % data
+        logger.info("[RawSocket] got initial service status: %s", service_id)
+        # Send Initial Status
+        new_line = 'event_type="INITIAL SERVICE STATUS" hostname="%s" ' \
+                   'servicename="%s" state="%s" ' \
+                   'in_scheduled_downtime="%s" ' \
+                   % (host_name,service_description,service_state,service_in_downtime)
         t = time.time()
         formatted = time.strftime('%Y-%m-%dT%H:%M:%S')
         tz = self.get_formatted_tz()
@@ -317,21 +330,32 @@ class RawSocket_broker(BaseModule):
                 or data['last_state'] != data['state'] \
                 or data['last_state_type'] != data['state_type']:
             # get the business_impact previously found and add it to the brok
-            data["in_scheduled_downtime"] = self.dict_in_scheduled_downtime[data["host_name"]]
-            if data["in_scheduled_downtime"] is True:
-            	data["sla_state"] = 'UP'
+            host_name = b.data['host_name']
+            if host_name not in self.hosts_downtime:
+                logger.warning("[RawSocket] received service check result for an unknown host: %s", host_name)
+                
+                new_line = 'event_type="HOST CHECK RESULT" ' \
+                       'hostname="%(host_name)s" state="%(state)s" last_state="%(last_state)s" ' \
+                       'state_type="%(state_type)s" last_state_type="%(last_state_type)s" ' \
+                       'last_hard_state_change="%(last_hard_state_change)s" output="%(output)s"' \
+                       % data
             else:
-            	data["sla_state"] = data["state"]
+                data["in_scheduled_downtime"] = self.hosts_downtime[host_name]
+                if data["in_scheduled_downtime"] is True:
+                    data["sla_state"] = 'UP'
+                else:
+                    data["sla_state"] = data["state"]
 
-            new_line = 'event_type="HOST CHECK RESULT" ' \
+                new_line = 'event_type="HOST CHECK RESULT" ' \
                        'hostname="%(host_name)s" state="%(state)s" sla_state="%(sla_state)s" last_state="%(last_state)s" ' \
                        'state_type="%(state_type)s" last_state_type="%(last_state_type)s" ' \
                        'in_scheduled_downtime="%(in_scheduled_downtime)s" ' \
                        'last_hard_state_change="%(last_hard_state_change)s" output="%(output)s"' \
                        % data
-            t = time.time()
-            formatted = time.strftime('%Y-%m-%dT%H:%M:%S')
-            tz = self.get_formatted_tz()
+                       
+            t = time.time() 
+            formatted = time.strftime('%Y-%m-%dT%H:%M:%S') 
+            tz = self.get_formatted_tz()                        
             isodate = datetime.datetime.utcnow().isoformat()
             hostname = socket.gethostname()
             self.buffer.append("<0>%s %s %s %s[0]: timestamp=%d %s" %
@@ -347,22 +371,35 @@ class RawSocket_broker(BaseModule):
                 or data['last_state'] != data['state'] \
                 or data['last_state_type'] != data['state_type']:
             # get the business_impact previously found and add it to the brok
-            key = data["host_name"] + "::" + data["service_description"]
-            data["in_scheduled_downtime"] = self.dict_in_scheduled_downtime[key]
-            if data["in_scheduled_downtime"] is True:
-            	data["sla_state"] = 'OK'
-            else:
-            	data["sla_state"] = data["state"]
+            host_name = b.data['host_name']
+            service_description = b.data['service_description']
+            service_id = host_name+'/'+service_description
 
-            new_line = 'event_type="SERVICE CHECK RESULT" hostname="%(host_name)s" ' \
-                       'servicename="%(service_description)s" state="%(state)s" sla_state="%(sla_state)s" last_state="%(last_state)s"' \
-                       ' state_type="%(state_type)s" last_state_type="%(last_state_type)s" ' \
-                       'in_scheduled_downtime="%(in_scheduled_downtime)s" ' \
-                       'last_hard_state_change="%(last_hard_state_change)s" output="%(output)s"' \
+            if service_id not in self.services_downtime:
+                logger.warning("[RawSocket] received service check result for an unknown host/service: %s", service_id)
+                
+                new_line = 'event_type="SERVICE CHECK RESULT" hostname="%(host_name)s" ' \
+                       'servicename="%(service_description)s" state="%(state)s" ' \
+                       'last_state="%(last_state)s" state_type="%(state_type)s" ' \
+                       'last_state_type="%(last_state_type)s" output="%(output)s"' % data
+                       
+            else:
+                data["in_scheduled_downtime"] = self.services_downtime[service_id]
+                if data["in_scheduled_downtime"] is True:
+                    data["sla_state"] = 'OK'
+                else:
+                    data["sla_state"] = data["state"]
+
+                new_line = 'event_type="SERVICE CHECK RESULT" hostname="%(host_name)s" ' \
+                       'servicename="%(service_description)s" state="%(state)s" ' \
+                       'last_state="%(last_state)s" state_type="%(state_type)s" ' \
+                       'last_state_type="%(last_state_type)s" output="%(output)s" ' \
+                       'sla_state="%(sla_state)s" in_scheduled_downtime="%(in_scheduled_downtime)s"' \
                        % data
-            t = time.time()
-            formatted = time.strftime('%Y-%m-%dT%H:%M:%S')
-            tz = self.get_formatted_tz()
+            
+            t = time.time() 
+            formatted = time.strftime('%Y-%m-%dT%H:%M:%S') 
+            tz = self.get_formatted_tz() 
             isodate = datetime.datetime.utcnow().isoformat()
             hostname = socket.gethostname()
             self.buffer.append("<0>%s %s %s %s[0]: timestamp=%d %s" %
@@ -373,12 +410,29 @@ class RawSocket_broker(BaseModule):
 
     def manage_update_host_status_brok(self, b):
         # Update business_impact value
-        self.dict_in_scheduled_downtime[b.data["host_name"]] = b.data["in_scheduled_downtime"]
+        host_name = b.data['host_name']
+        if host_name not in self.hosts_downtime:
+            logger.info("[RawSocket] received host status update for an unknown host: %s", host_name)
+            logger.info("[RawSocket] setting host status for unknown host: %s", host_name)
+            self.hosts_downtime[host_name] = b.data['in_scheduled_downtime']
+        else:
+            logger.info("[RawSocket] received host status update: %s - downtime=%s", (host_name,b.data['in_scheduled_downtime']))
+            self.hosts_downtime[host_name] = b.data['in_scheduled_downtime']
+            
 
     def manage_update_service_status_brok(self, b):
         # Update business_impact value
-        key = b.data["host_name"] + "::" + b.data["service_description"]
-        self.dict_in_scheduled_downtime[key] = b.data["in_scheduled_downtime"]
+        host_name = b.data['host_name']
+        service_description = b.data['service_description']
+        service_id = host_name+'/'+service_description
+        if service_id not in self.services_downtime:
+            logger.info("[RawSocket] received service status update for an unknown service: %s", service_id)
+            logger.info("[RawSocket] setting service status for unknown service: %s", service_id)
+            self.services_downtime[service_id] = b.data['in_scheduled_downtime']
+        else:
+            logger.info("[RawSocket] received service status update: %s - downtime=%s", (service_id,b.data['in_scheduled_downtime']))
+            self.services_downtime[service_id] = b.data['in_scheduled_downtime']
+            
 
     def manage_initial_contact_status_brok(self, b):
         pass
@@ -391,6 +445,5 @@ class RawSocket_broker(BaseModule):
 
     @staticmethod
     def get_formatted_tz():
-        #tz = str.format('{0:05.2f}', float(time.timezone) / 3600 - time.daylight).replace('.', ':')
         tz = str.format('{0:05.2f}', float(time.timezone) / 3600).replace('.', ':')
         return  '-' + tz if time.timezone > 0 else '+' + tz
